@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Models\ChatMessage;
 use App\Services\PlanApplier;
 use App\Services\PlanAssistant;
+use App\Services\PlanInput;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Throwable;
@@ -21,16 +22,19 @@ class DraftPlan implements ShouldQueue
     use Queueable;
 
     /**
-     * Generous, but still bounded: the HTTP call itself gives up at 120s.
+     * Outlives the HTTP call, which gives up first with a readable message.
+     * Read at construction: the worker takes this from the queued payload.
      */
-    public int $timeout = 180;
+    public int $timeout;
 
     public int $tries = 1;
 
     public function __construct(
         private readonly int $messageId,
         private readonly ?string $targetName = null,
-    ) {}
+    ) {
+        $this->timeout = max(60, (int) config('services.openrouter.timeout')) + 60;
+    }
 
     public function handle(PlanAssistant $assistant, PlanApplier $applier): void
     {
@@ -73,8 +77,9 @@ class DraftPlan implements ShouldQueue
     }
 
     /**
-     * Everything said before this reply. A failed attempt carries no answer,
-     * so it is left out rather than fed back to the model.
+     * Everything said before this reply, with long pastes reduced to their
+     * structure. A failed attempt carries no answer, so it is left out rather
+     * than fed back to the model.
      *
      * @return list<array{role: string, content: string}>
      */
@@ -90,7 +95,9 @@ class DraftPlan implements ShouldQueue
                 ->get()
                 ->map(fn (ChatMessage $entry) => [
                     'role' => $entry->role,
-                    'content' => (string) $entry->content,
+                    'content' => $entry->role === 'user'
+                        ? PlanInput::condense((string) $entry->content)
+                        : (string) $entry->content,
                 ])
                 ->all()
         );

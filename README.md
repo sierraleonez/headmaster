@@ -31,9 +31,21 @@ boards or logs. Edit anything in the draft — rename cards, move them between
 columns, flip a note into a sub-project, drop what you don't want — then press
 Create. Nothing is written to the database until you do.
 
+Drafting happens on the queue, not during the web request — a plan regularly
+takes longer than PHP's `max_execution_time`. The page shows the pending reply
+and polls until it is ready.
+
+A long paste is condensed to its headings and list items before it is sent
+(`PlanInput`): background, rationale and scope notes never become cards, but
+they are slow to read and slow to echo back. Your message is stored and shown
+in full; only the copy handed to the model is trimmed. A 19,000-character
+curriculum comes down to about 8,000 and drafts in around 40 seconds instead of
+timing out.
+
 It runs on [OpenRouter](https://openrouter.ai). Set `OPENROUTER_API_KEY` in
-`.env`; `OPENROUTER_MODEL` defaults to `deepseek/deepseek-chat-v3.1`. Without a
-key the rest of the app works normally and the assistant says what is missing.
+`.env`; `OPENROUTER_MODEL` defaults to `deepseek/deepseek-chat-v3.1`,
+`OPENROUTER_TIMEOUT` to 300 seconds. Without a key the rest of the app works
+normally and the assistant says what is missing.
 
 ## Stack
 

@@ -22,6 +22,10 @@ return [
         'key' => env('OPENROUTER_API_KEY'),
         'model' => env('OPENROUTER_MODEL', 'deepseek/deepseek-chat-v3.1'),
         'base_url' => env('OPENROUTER_BASE_URL', 'https://openrouter.ai/api/v1'),
+        // A large plan can take minutes to draft. The job outlives this.
+        'timeout' => (int) env('OPENROUTER_TIMEOUT', 300),
+        // A draft is a skeleton, not a transcript; this is a runaway guard.
+        'max_tokens' => (int) env('OPENROUTER_MAX_TOKENS', 8000),
     ],
 
     'resend' => [

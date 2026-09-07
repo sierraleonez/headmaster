@@ -207,6 +207,13 @@ export default function ChatPage({
                                     ))}
                                 </SelectContent>
                             </Select>
+
+                            {message.length > 3000 && (
+                                <span className="text-muted-foreground text-xs">
+                                    · long plans are sent as their headings and
+                                    lists, without the prose
+                                </span>
+                            )}
                         </div>
 
                         <div className="relative">

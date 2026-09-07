@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
 use RuntimeException;
 
@@ -55,8 +56,15 @@ class PlanAssistant
     - Put every card in "Backlog" unless the user says work is already underway or finished.
     - Use subprojects for parts of the plan large enough to need their own board (a module, a phase, a mesocycle).
     - Use a log for anything the user records repeatedly over time rather than moves through stages.
-    - Prefer a handful of meaningful cards over dozens of trivial ones.
     - Set "plan" to null when the user is only asking a question or the request is too vague to map.
+
+    A long plan may reach you condensed to its headings and list items - its structure without
+    the prose around it. Map that structure:
+    - One card per phase, module or block, in the order given.
+    - Nest at most two levels deep. Summarise what a phase holds in its "body", briefly; do not
+      copy the outline back verbatim.
+    - It is always fine to leave a phase as one card. The user expands the detail later by
+      opening that card's sub-project and asking you there.
     PROMPT;
 
     /**
@@ -79,25 +87,52 @@ class PlanAssistant
             $system .= "\n\nThe draft will be created inside the board \"{$targetName}\".";
         }
 
-        $response = Http::withToken($key)
-            ->withHeaders([
-                'HTTP-Referer' => config('app.url'),
-                'X-Title' => config('app.name'),
-            ])
-            ->timeout(120)
-            ->post(rtrim((string) config('services.openrouter.base_url'), '/').'/chat/completions', [
-                'model' => config('services.openrouter.model'),
-                'response_format' => ['type' => 'json_object'],
-                'messages' => [
-                    ['role' => 'system', 'content' => $system],
-                    ...$messages,
-                ],
-            ]);
+        $timeout = max(30, (int) config('services.openrouter.timeout'));
+
+        try {
+            $response = Http::withToken($key)
+                ->withHeaders([
+                    'HTTP-Referer' => config('app.url'),
+                    'X-Title' => config('app.name'),
+                ])
+                ->connectTimeout(15)
+                ->timeout($timeout)
+                ->post(rtrim((string) config('services.openrouter.base_url'), '/').'/chat/completions', [
+                    'model' => config('services.openrouter.model'),
+                    'response_format' => ['type' => 'json_object'],
+                    // Thinking tokens double the wait for no gain here: the
+                    // answer is a structured plan, not a hard question.
+                    'reasoning' => ['enabled' => false],
+                    // Drafting is bounded by how fast tokens come back, so
+                    // take the quickest provider carrying this model.
+                    'provider' => ['sort' => 'throughput'],
+                    'max_tokens' => max(1000, (int) config('services.openrouter.max_tokens')),
+                    'messages' => [
+                        ['role' => 'system', 'content' => $system],
+                        ...$messages,
+                    ],
+                ]);
+        } catch (ConnectionException $exception) {
+            throw new RuntimeException(
+                str_contains($exception->getMessage(), 'imed out')
+                    ? "The assistant was still writing after {$timeout} seconds. Very large plans are "
+                        .'slow to draft in one go - try one phase at a time, and expand each part from inside it.'
+                    : 'Could not reach OpenRouter: '.mb_substr($exception->getMessage(), 0, 200),
+                previous: $exception,
+            );
+        }
 
         if ($response->failed()) {
             $detail = $response->json('error.message') ?? $response->body();
 
             throw new RuntimeException('The assistant could not be reached: '.mb_substr((string) $detail, 0, 300));
+        }
+
+        if ($response->json('choices.0.finish_reason') === 'length') {
+            throw new RuntimeException(
+                'The draft outgrew the reply limit before it was finished. Ask for one phase at '
+                .'a time, or for a shorter outline, then expand each part from inside it.'
+            );
         }
 
         $content = (string) $response->json('choices.0.message.content', '');

@@ -1,0 +1,71 @@
+name: headmaster
+
+# Every value comes from .env.docker. Nothing is interpolated from a plain
+# ".env": Compose would read the Laravel development file sitting next to this
+# one and quietly hand its credentials to MySQL.
+
+services:
+    web:
+        build:
+            context: .
+            target: web
+        restart: unless-stopped
+        ports:
+            - '${HEADMASTER_PORT:-8080}:80'
+        depends_on:
+            - app
+
+    app:
+        build:
+            context: .
+            target: app
+        restart: unless-stopped
+        env_file:
+            - .env.docker
+        environment:
+            # The schema is this container's job; the worker leaves it alone.
+            RUN_MIGRATIONS: 'true'
+        depends_on:
+            mysql:
+                condition: service_healthy
+
+    # Plans are drafted here. Without this container the chat sits on
+    # "Mapping your plan..." for ever.
+    queue:
+        build:
+            context: .
+            target: app
+        restart: unless-stopped
+        env_file:
+            - .env.docker
+        command:
+            - php
+            - artisan
+            - queue:work
+            - --tries=1
+            - --timeout=420
+            - --sleep=1
+        depends_on:
+            mysql:
+                condition: service_healthy
+            app:
+                condition: service_started
+
+    mysql:
+        image: mysql:8.4
+        restart: unless-stopped
+        env_file:
+            - .env.docker
+        volumes:
+            - database:/var/lib/mysql
+        healthcheck:
+            test:
+                - CMD-SHELL
+                - mysqladmin ping -h 127.0.0.1 -u root -p"$$MYSQL_ROOT_PASSWORD" --silent
+            interval: 5s
+            timeout: 5s
+            retries: 20
+            start_period: 30s
+
+volumes:
+    database:

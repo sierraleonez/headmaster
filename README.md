@@ -67,6 +67,12 @@ composer run dev     # server, vite and queue together
 
 Registering an account creates its root board automatically.
 
+`composer run dev` runs the queue worker alongside the server. The assistant
+needs it: without a worker, drafts never arrive.
+
+To deploy it with Docker instead, see [DEPLOYMENT.md](DEPLOYMENT.md) —
+`cp .env.docker.example .env.docker` and `docker compose up -d --build`.
+
 ## Checks
 
 ```bash

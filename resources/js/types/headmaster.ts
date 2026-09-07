@@ -77,6 +77,8 @@ export type Plan = {
 export type ChatMessage = {
     id: number;
     role: 'user' | 'assistant';
+    /** An assistant reply is drafted by a queued job, so it starts pending. */
+    status: 'pending' | 'ready' | 'failed';
     content: string | null;
     plan: Plan | null;
     applied_project_id: number | null;

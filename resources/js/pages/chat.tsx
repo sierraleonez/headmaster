@@ -50,10 +50,28 @@ export default function ChatPage({
         thread.current?.scrollTo({ top: thread.current.scrollHeight });
     }, [conversation]);
 
+    const waiting =
+        conversation?.messages.some((entry) => entry.status === 'pending') ??
+        false;
+
+    // The reply is written by a queued job; ask for it until it turns up.
+    useEffect(() => {
+        if (!waiting) {
+            return;
+        }
+
+        const poll = setInterval(
+            () => router.reload({ only: ['conversation'] }),
+            2000,
+        );
+
+        return () => clearInterval(poll);
+    }, [waiting]);
+
     const send = () => {
         const content = message.trim();
 
-        if (!content || sending) {
+        if (!content || sending || waiting) {
             return;
         }
 
@@ -213,10 +231,10 @@ export default function ChatPage({
                             <Button
                                 size="sm"
                                 className="absolute right-2 bottom-2"
-                                disabled={sending || !message.trim()}
+                                disabled={sending || waiting || !message.trim()}
                                 onClick={send}
                             >
-                                {sending ? 'Thinking' : 'Send'}
+                                {sending || waiting ? 'Working' : 'Send'}
                                 <CornerDownLeft />
                             </Button>
                         </div>
@@ -253,6 +271,22 @@ function MessageBubble({
             <div className="ml-auto max-w-2xl rounded-lg border px-3 py-2">
                 <p className="text-sm whitespace-pre-wrap">{message.content}</p>
             </div>
+        );
+    }
+
+    if (message.status === 'pending') {
+        return (
+            <p className="text-muted-foreground mr-auto animate-pulse text-sm">
+                Mapping your plan...
+            </p>
+        );
+    }
+
+    if (message.status === 'failed') {
+        return (
+            <p className="text-muted-foreground mr-auto max-w-3xl rounded-md border border-dashed px-3 py-2 text-sm">
+                {message.content ?? 'The assistant did not reply.'}
+            </p>
         );
     }
 

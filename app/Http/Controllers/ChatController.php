@@ -2,24 +2,22 @@
 
 namespace App\Http\Controllers;
 
+use App\Jobs\DraftPlan;
 use App\Models\ChatMessage;
 use App\Models\Conversation;
 use App\Models\Project;
 use App\Services\PlanApplier;
-use App\Services\PlanAssistant;
 use App\Services\ProjectTree;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 use Inertia\Inertia;
 use Inertia\Response;
-use RuntimeException;
 
 class ChatController extends Controller
 {
     public function __construct(
         private readonly ProjectTree $tree,
-        private readonly PlanAssistant $assistant,
         private readonly PlanApplier $applier,
     ) {}
 
@@ -41,7 +39,8 @@ class ChatController extends Controller
     }
 
     /**
-     * Send a message and store the assistant's reply, draft plan included.
+     * Send a message. The reply is drafted by a queued job, so the request
+     * returns straight away and the page polls for the answer.
      */
     public function store(Request $request): RedirectResponse
     {
@@ -67,6 +66,7 @@ class ChatController extends Controller
 
         $conversation->messages()->create([
             'role' => 'user',
+            'status' => ChatMessage::STATUS_READY,
             'content' => $validated['content'],
         ]);
 
@@ -77,34 +77,14 @@ class ChatController extends Controller
             $target = null;
         }
 
-        try {
-            $draft = $this->assistant->draft(
-                array_values(
-                    $conversation->messages()
-                        ->get()
-                        ->map(fn (ChatMessage $message) => [
-                            'role' => $message->role,
-                            'content' => (string) $message->content,
-                        ])
-                        ->all()
-                ),
-                $target?->name,
-            );
-        } catch (RuntimeException $exception) {
-            $conversation->touch();
-
-            Inertia::flash('toast', ['type' => 'error', 'message' => $exception->getMessage()]);
-
-            return redirect()->route('chat.show', $conversation);
-        }
-
-        $conversation->messages()->create([
+        $reply = $conversation->messages()->create([
             'role' => 'assistant',
-            'content' => $draft['message'],
-            'plan' => $draft['plan'] ? $this->applier->normalise($draft['plan']) : null,
+            'status' => ChatMessage::STATUS_PENDING,
         ]);
 
         $conversation->touch();
+
+        DraftPlan::dispatch($reply->id, $target?->name);
 
         return redirect()->route('chat.show', $conversation);
     }
@@ -165,6 +145,7 @@ class ChatController extends Controller
                 'messages' => $conversation->messages->map(fn (ChatMessage $message) => [
                     'id' => $message->id,
                     'role' => $message->role,
+                    'status' => $message->status,
                     'content' => $message->content,
                     'plan' => $message->plan,
                     'applied_project_id' => $message->applied_project_id,

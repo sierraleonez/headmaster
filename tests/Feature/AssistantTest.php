@@ -2,14 +2,17 @@
 
 namespace Tests\Feature;
 
+use App\Jobs\DraftPlan;
 use App\Models\ChatMessage;
 use App\Models\Item;
 use App\Models\LogEntry;
 use App\Models\Project;
 use App\Models\User;
 use App\Services\PlanApplier;
+use App\Services\PlanAssistant;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
 
 class AssistantTest extends TestCase
@@ -102,7 +105,30 @@ class AssistantTest extends TestCase
         $this->assertSame('Backlog', $normalised['items'][0]['column']);
     }
 
-    public function test_the_assistant_stores_its_draft_without_creating_anything(): void
+    public function test_the_reply_is_drafted_off_the_request(): void
+    {
+        config(['services.openrouter.key' => 'test-key']);
+
+        Http::fake();
+        Queue::fake();
+
+        $user = User::factory()->create();
+
+        $this->actingAs($user)
+            ->post(route('chat.store'), ['content' => 'Map my plan.'])
+            ->assertRedirect();
+
+        // The model is never called while the browser is waiting: PHP's
+        // max_execution_time kills the request long before a slow reply lands.
+        Http::assertNothingSent();
+        Queue::assertPushed(DraftPlan::class);
+
+        $reply = ChatMessage::where('role', 'assistant')->firstOrFail();
+        $this->assertSame(ChatMessage::STATUS_PENDING, $reply->status);
+        $this->assertNull($reply->content);
+    }
+
+    public function test_the_queued_job_fills_the_pending_reply_in(): void
     {
         config(['services.openrouter.key' => 'test-key']);
 
@@ -130,6 +156,7 @@ class AssistantTest extends TestCase
 
         $reply = ChatMessage::where('role', 'assistant')->firstOrFail();
 
+        $this->assertSame(ChatMessage::STATUS_READY, $reply->status);
         $this->assertSame('Here is a draft.', $reply->content);
         $this->assertSame('Learn Rust', $reply->plan['name']);
         $this->assertNull($reply->applied_project_id);
@@ -166,7 +193,49 @@ class AssistantTest extends TestCase
         $this->assertSame('Learn Rust, properly', $message->fresh()->plan['name']);
     }
 
-    public function test_a_missing_api_key_is_reported_rather_than_crashing(): void
+    public function test_the_page_reports_the_status_the_client_polls_for(): void
+    {
+        config(['services.openrouter.key' => 'test-key']);
+
+        Http::fake([
+            '*' => Http::response([
+                'choices' => [['message' => ['content' => json_encode([
+                    'message' => 'Here is a draft.',
+                    'plan' => $this->plan(),
+                ])]]],
+            ]),
+        ]);
+
+        $user = User::factory()->create();
+        $conversation = $user->conversations()->create(['title' => 'Rust']);
+        $pending = $conversation->messages()->create([
+            'role' => 'assistant',
+            'status' => ChatMessage::STATUS_PENDING,
+        ]);
+
+        $this->actingAs($user)
+            ->get(route('chat.show', $conversation))
+            ->assertInertia(fn ($page) => $page
+                ->component('chat')
+                ->where('conversation.messages.0.status', ChatMessage::STATUS_PENDING)
+                ->where('conversation.messages.0.plan', null)
+            );
+
+        (new DraftPlan($pending->id))->handle(
+            app(PlanAssistant::class),
+            app(PlanApplier::class),
+        );
+
+        // The next poll picks the finished draft up.
+        $this->actingAs($user)
+            ->get(route('chat.show', $conversation))
+            ->assertInertia(fn ($page) => $page
+                ->where('conversation.messages.0.status', ChatMessage::STATUS_READY)
+                ->where('conversation.messages.0.plan.name', 'Learn Rust')
+            );
+    }
+
+    public function test_a_missing_api_key_is_reported_on_the_message(): void
     {
         config(['services.openrouter.key' => null]);
 
@@ -176,8 +245,61 @@ class AssistantTest extends TestCase
             ->post(route('chat.store'), ['content' => 'Hello?'])
             ->assertRedirect();
 
-        $this->assertSame(0, ChatMessage::where('role', 'assistant')->count());
-        $this->assertSame(1, ChatMessage::where('role', 'user')->count());
+        $reply = ChatMessage::where('role', 'assistant')->firstOrFail();
+
+        $this->assertSame(ChatMessage::STATUS_FAILED, $reply->status);
+        $this->assertStringContainsString('OPENROUTER_API_KEY', (string) $reply->content);
+    }
+
+    public function test_a_failed_attempt_is_not_fed_back_to_the_model(): void
+    {
+        config(['services.openrouter.key' => 'test-key']);
+
+        $user = User::factory()->create();
+        $conversation = $user->conversations()->create(['title' => 'Rust']);
+
+        $conversation->messages()->create([
+            'role' => 'user',
+            'content' => 'Map my plan.',
+        ]);
+        $conversation->messages()->create([
+            'role' => 'assistant',
+            'status' => ChatMessage::STATUS_FAILED,
+            'content' => 'The assistant could not be reached: 502',
+        ]);
+        $conversation->messages()->create([
+            'role' => 'user',
+            'content' => 'Try again.',
+        ]);
+        $pending = $conversation->messages()->create([
+            'role' => 'assistant',
+            'status' => ChatMessage::STATUS_PENDING,
+        ]);
+
+        Http::fake([
+            '*' => Http::response([
+                'choices' => [['message' => ['content' => json_encode([
+                    'message' => 'Here is a draft.',
+                    'plan' => $this->plan(),
+                ])]]],
+            ]),
+        ]);
+
+        (new DraftPlan($pending->id))->handle(
+            app(PlanAssistant::class),
+            app(PlanApplier::class),
+        );
+
+        Http::assertSent(function ($request) {
+            $roles = collect($request['messages'])->pluck('role')->all();
+
+            // system, user, user - the failed attempt carried no answer.
+            $this->assertSame(['system', 'user', 'user'], $roles);
+
+            return true;
+        });
+
+        $this->assertSame(ChatMessage::STATUS_READY, $pending->fresh()->status);
     }
 
     public function test_a_plan_cannot_be_applied_to_someone_elses_board(): void

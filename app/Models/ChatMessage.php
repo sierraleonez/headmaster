@@ -10,6 +10,7 @@ use Illuminate\Support\Carbon;
  * @property int $id
  * @property int $conversation_id
  * @property string $role
+ * @property string $status
  * @property string|null $content
  * @property array<string, mixed>|null $plan
  * @property int|null $applied_project_id
@@ -19,9 +20,16 @@ use Illuminate\Support\Carbon;
  */
 class ChatMessage extends Model
 {
+    public const STATUS_PENDING = 'pending';
+
+    public const STATUS_READY = 'ready';
+
+    public const STATUS_FAILED = 'failed';
+
     protected $fillable = [
         'conversation_id',
         'role',
+        'status',
         'content',
         'plan',
         'applied_project_id',

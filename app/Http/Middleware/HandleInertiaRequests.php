@@ -2,6 +2,7 @@
 
 namespace App\Http\Middleware;
 
+use App\Services\ProjectTree;
 use Illuminate\Http\Request;
 use Inertia\Middleware;
 
@@ -42,6 +43,10 @@ class HandleInertiaRequests extends Middleware
                 'user' => $request->user(),
             ],
             'sidebarOpen' => ! $request->hasCookie('sidebar_state') || $request->cookie('sidebar_state') === 'true',
+            // The project explorer in the sidebar, on every authenticated page.
+            'tree' => fn () => $request->user()
+                ? app(ProjectTree::class)->treeFor($request->user())
+                : [],
         ];
     }
 }

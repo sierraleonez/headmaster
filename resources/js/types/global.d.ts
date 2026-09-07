@@ -1,4 +1,5 @@
 import type { Auth } from '@/types/auth';
+import type { TreeNode } from '@/types/headmaster';
 
 declare module 'react' {
     interface InputHTMLAttributes<T> {
@@ -12,6 +13,7 @@ declare module '@inertiajs/core' {
             name: string;
             auth: Auth;
             sidebarOpen: boolean;
+            tree: TreeNode[];
             [key: string]: unknown;
         };
     }

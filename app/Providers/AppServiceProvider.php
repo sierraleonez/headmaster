@@ -2,6 +2,8 @@
 
 namespace App\Providers;
 
+use App\Models\User;
+use App\Services\ProjectTree;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\DB;
@@ -24,6 +26,17 @@ class AppServiceProvider extends ServiceProvider
     public function boot(): void
     {
         $this->configureDefaults();
+        $this->giveEveryUserABoard();
+    }
+
+    /**
+     * Every new account starts on an empty kanban board with the default columns.
+     */
+    protected function giveEveryUserABoard(): void
+    {
+        User::created(function (User $user): void {
+            app(ProjectTree::class)->createBoard($user, null, 'HeadMaster');
+        });
     }
 
     /**
